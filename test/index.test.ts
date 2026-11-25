@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app, { type Bindings } from "../src/index";
 import { clearAuthCache } from "../src/google-auth";
-import { findBlockingRule, parseBlockRules } from "../src/blocklist";
+import { findMatchingRule, parseUrlRules } from "../src/url-rules";
 
 const UPSTREAM = "https://my-service-abc123-an.a.run.app";
 const TOKEN_URI = "https://oauth2.googleapis.com/token";
@@ -214,14 +214,136 @@ describe("blocklist", () => {
   });
 
   it("改行区切り文字列・コメント・完全 URL パターンを扱える", () => {
-    const rules = parseBlockRules("# comment\n/secret/*\nhttps://*.example.com/hidden/*\n");
+    const rules = parseUrlRules("# comment\n/secret/*\nhttps://*.example.com/hidden/*\n");
     expect(rules).toHaveLength(2);
-    expect(findBlockingRule(rules, "GET", "https://a.example.com/secret/x")).toBeDefined();
-    expect(findBlockingRule(rules, "GET", "https://foo.example.com/hidden/y")).toBeDefined();
-    expect(findBlockingRule(rules, "GET", "https://foo.other.com/hidden/y")).toBeUndefined();
+    expect(findMatchingRule(rules, "GET", "https://a.example.com/secret/x")).toBeDefined();
+    expect(findMatchingRule(rules, "GET", "https://foo.example.com/hidden/y")).toBeDefined();
+    expect(findMatchingRule(rules, "GET", "https://foo.other.com/hidden/y")).toBeUndefined();
   });
 
   it("不正なパターンはエラー", () => {
-    expect(() => parseBlockRules(["/(unclosed"])).toThrow(/Invalid BLOCKED_URL_PATTERNS/);
+    expect(() => parseUrlRules(["/(unclosed"], "BLOCKED_URL_PATTERNS")).toThrow(/Invalid BLOCKED_URL_PATTERNS/);
+  });
+});
+
+describe("edge cache", () => {
+  let store: Map<string, Response>;
+  let pending: Promise<unknown>[];
+  const ctx = () => ({
+    waitUntil: (p: Promise<unknown>) => void pending.push(p),
+    passThroughOnException: () => {},
+    props: {},
+  });
+  const cacheEnv = () => env({ CACHE_URL_PATTERNS: ["/icons/*", "/app/*"] });
+  let upstreamResponse: () => Response;
+
+  beforeEach(() => {
+    store = new Map();
+    pending = [];
+    vi.stubGlobal("caches", {
+      default: {
+        match: async (req: Request) => store.get(req.url)?.clone(),
+        put: async (req: Request, res: Response) => {
+          await res.arrayBuffer().then((b) => store.set(req.url, new Response(b, res)));
+        },
+      },
+    });
+    upstreamResponse = () =>
+      new Response("icon-bytes", { status: 200, headers: { "cache-control": "public, max-age=2592000", "content-type": "image/png" } });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url === TOKEN_URI) return Response.json({ id_token: fakeIdToken(Math.floor(Date.now() / 1000) + 3600) });
+      return upstreamResponse();
+    });
+  });
+
+  const get = async (path: string, init: RequestInit = {}, e = cacheEnv()) => {
+    const res = await app.request(`https://proxy.example.com${path}`, init, e, ctx() as unknown as ExecutionContext);
+    await Promise.all(pending);
+    return res;
+  };
+  const upstreamCalls = () => calls.filter((c) => c.url.startsWith(UPSTREAM)).length;
+  const tokenCalls = () => calls.filter((c) => c.url === TOKEN_URI).length;
+
+  it("1 回目は MISS で保存し、2 回目は HIT で Cloud Run もトークン取得も呼ばない", async () => {
+    const r1 = await get("/icons/github.com/icon.png");
+    expect(r1.headers.get("x-proxy-cache")).toBe("MISS");
+    expect(await r1.text()).toBe("icon-bytes");
+    const r2 = await get("/icons/github.com/icon.png");
+    expect(r2.headers.get("x-proxy-cache")).toBe("HIT");
+    expect(await r2.text()).toBe("icon-bytes");
+    expect(r2.headers.get("cache-control")).toBe("public, max-age=2592000");
+    expect(upstreamCalls()).toBe(1);
+    expect(tokenCalls()).toBe(1);
+  });
+
+  it("重複スラッシュは正規化した URL をキーにする", async () => {
+    await get("/icons/a.com/icon.png");
+    const r = await get("//icons//a.com/icon.png");
+    expect(r.headers.get("x-proxy-cache")).toBe("HIT");
+  });
+
+  it("CACHE_URL_PATTERNS に一致しない URL はキャッシュしない（ヘッダーも付けない）", async () => {
+    const r = await get("/api/config");
+    expect(r.headers.get("x-proxy-cache")).toBeNull();
+    expect(store.size).toBe(0);
+  });
+
+  it("CACHE_URL_PATTERNS 未設定ならキャッシュしない", async () => {
+    await get("/icons/a.com/icon.png", {}, env());
+    await get("/icons/a.com/icon.png", {}, env());
+    expect(upstreamCalls()).toBe(2);
+    expect(store.size).toBe(0);
+  });
+
+  it.each([
+    ["Authorization 付き", { headers: { authorization: "Bearer x" } }],
+    ["Range 付き", { headers: { range: "bytes=0-1" } }],
+    ["POST", { method: "POST", body: "x" }],
+    ["WebSocket", { headers: { upgrade: "websocket", connection: "Upgrade" } }],
+  ])("%s のリクエストはキャッシュを使わない", async (_label, init) => {
+    await get("/app/main.js", init as RequestInit);
+    await get("/app/main.js", init as RequestInit);
+    expect(upstreamCalls()).toBe(2);
+    expect(store.size).toBe(0);
+  });
+
+  it.each([
+    ["no-store", { "cache-control": "no-store" }],
+    ["no-cache", { "cache-control": "no-cache, max-age=600" }],
+    ["private", { "cache-control": "private, max-age=600" }],
+    ["max-age=0", { "cache-control": "public, max-age=0" }],
+    ["Cache-Control なし", {}],
+    ["Set-Cookie あり", { "cache-control": "public, max-age=600", "set-cookie": "a=b" }],
+    ["Vary: *", { "cache-control": "public, max-age=600", vary: "*" }],
+  ])("レスポンスが %s なら保存しない（BYPASS）", async (_label, h) => {
+    upstreamResponse = () => new Response("x", { status: 200, headers: h as Record<string, string> });
+    const r = await get("/app/main.js");
+    expect(r.headers.get("x-proxy-cache")).toBe("BYPASS");
+    expect(store.size).toBe(0);
+  });
+
+  it("エラー応答は保存しない", async () => {
+    upstreamResponse = () => new Response("err", { status: 500, headers: { "cache-control": "public, max-age=600" } });
+    const r = await get("/app/main.js");
+    expect(r.status).toBe(500);
+    expect(r.headers.get("x-proxy-cache")).toBe("BYPASS");
+    expect(store.size).toBe(0);
+  });
+
+  it("リダイレクトは保存する（アイコンサービスへのリダイレクト等）", async () => {
+    upstreamResponse = () =>
+      new Response(null, { status: 302, headers: { location: "https://icons.duckduckgo.com/ip3/a.com.ico", "cache-control": "public, max-age=600" } });
+    await get("/icons/a.com/icon.png");
+    const r = await get("/icons/a.com/icon.png");
+    expect(r.status).toBe(302);
+    expect(r.headers.get("x-proxy-cache")).toBe("HIT");
+    expect(r.headers.get("location")).toBe("https://icons.duckduckgo.com/ip3/a.com.ico");
+  });
+
+  it("ブロック対象はキャッシュより先に 403", async () => {
+    const r = await get("/admin", {}, env({ CACHE_URL_PATTERNS: ["/*"] }));
+    expect(r.status).toBe(403);
   });
 });

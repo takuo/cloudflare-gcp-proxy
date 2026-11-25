@@ -67,6 +67,7 @@ gcloud iam service-accounts keys create service-account.json \
 | `GOOGLE_SERVICE_ACCOUNT_KEY` | ✓（secret） | サービスアカウントキー JSON |
 | `AUDIENCE` | | ID トークンの audience。省略時は `CLOUD_RUN_URL` のオリジン。カスタムドメインを使う場合などに指定 |
 | `BLOCKED_URL_PATTERNS` | | 403 を返す URL パターン（後述） |
+| `CACHE_URL_PATTERNS` | | エッジキャッシュ対象の URL パターン（書式は `BLOCKED_URL_PATTERNS` と同じ。後述） |
 | `PRESERVE_CLIENT_AUTHORIZATION` | | `"true"` にするとクライアントの `Authorization` をそのまま渡し、ID トークンは `X-Serverless-Authorization` に付ける（Cloud Run はこのヘッダーで IAM 認証する） |
 
 ### BLOCKED_URL_PATTERNS
@@ -91,6 +92,19 @@ gcloud iam service-accounts keys create service-account.json \
 - **`/.*` は使わないこと。** パターン中の `/.` がカレントディレクトリとして正規化されて `/*` と同じ意味になり、全パスが 403 になります。ドットを文字として書きたいときは `/(\..*)` のように正規表現グループに入れます。
 - 不正なパターン（`^/\..*` など）があると、すべてのリクエストが 500 になります。
 
+### CACHE_URL_PATTERNS（エッジキャッシュ）
+
+一致した URL のレスポンスを Workers の Cache API でキャッシュし、ヒット時は Cloud Run を呼びません（ID トークンの取得もしません）。
+
+- キャッシュ期間は Cloud Run が返す `Cache-Control`（`s-maxage` / `max-age`）に従います。
+- 次のものはキャッシュしません。
+  - GET 以外、`Authorization` / `Range` 付き、WebSocket のリクエスト
+  - 200・301・302・307・308 以外のレスポンス
+  - `Set-Cookie` 付き、`Vary: *`、`Cache-Control` に `no-store` / `no-cache` / `private` がある、`max-age` が 0 か無い
+- 対象 URL のレスポンスには `x-proxy-cache: HIT / MISS / BYPASS` が付きます。
+- キャッシュはデータセンターごとです。Cache API はカスタムドメインでのみ動き、`workers.dev` では何もしません。
+- 判定は `BLOCKED_URL_PATTERNS` の後なので、ブロック対象がキャッシュから返ることはありません。
+
 ## 補足
 
 - ID トークンは Worker の isolate ごとにメモリへキャッシュし、期限の 5 分前に再取得します。
@@ -107,6 +121,7 @@ gcloud iam service-accounts keys create service-account.json \
 | Worker | `BLOCKED_URL_PATTERNS` に `/admin{/*}?` | 管理画面を外部から使わせない |
 | Vaultwarden | `DOMAIN=https://<Worker のドメイン>` | WebAuthn・メールや Send のリンクが入口のドメインを使うため |
 | Vaultwarden | `IP_HEADER` はデフォルト（`X-Real-IP`）のまま | プロキシが実クライアント IP を入れるため |
+| Worker | `CACHE_URL_PATTERNS` に `/icons/*` と Web Vault の静的ファイル | 認証不要で `Cache-Control` 付きのものだけエッジで返し、Cloud Run の起動と egress を減らす |
 | Cloud Run | `--max-instances=1` | WebSocket 通知がインスタンス内メモリで管理されるため |
 
 - Cloud Run の HTTP/1 リクエストボディ上限は 32MB なので、それを超える添付ファイルは送れません。

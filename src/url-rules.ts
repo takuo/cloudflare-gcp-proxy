@@ -1,5 +1,5 @@
 /**
- * URLPattern ベースのブロックリスト。
+ * URLPattern ベースの URL ルール（BLOCKED_URL_PATTERNS / CACHE_URL_PATTERNS で共用）。
  *
  * パターン書式:
  *   "/admin/*"                    パス名のみでマッチ（先頭が "/"）
@@ -9,7 +9,7 @@
  * パス名マッチは大文字小文字を区別しない（"/ADMIN" のような回避を防ぐため）。
  */
 
-export interface BlockRule {
+export interface UrlRule {
   source: string;
   method?: string;
   pattern: URLPattern;
@@ -17,8 +17,8 @@ export interface BlockRule {
 
 const METHOD_PREFIX = /^([A-Za-z]+)\s+(\S.*)$/;
 
-export function parseBlockRules(raw: unknown): BlockRule[] {
-  return normalizeList(raw).map((source) => {
+export function parseUrlRules(raw: unknown, varName = "URL_PATTERNS"): UrlRule[] {
+  return normalizeList(raw, varName).map((source) => {
     let method: string | undefined;
     let body = source;
     const m = METHOD_PREFIX.exec(source);
@@ -32,18 +32,18 @@ export function parseBlockRules(raw: unknown): BlockRule[] {
         : new URLPattern(body, { ignoreCase: true });
       return { source, method, pattern };
     } catch (e) {
-      throw new Error(`Invalid BLOCKED_URL_PATTERNS entry "${source}": ${(e as Error).message}`);
+      throw new Error(`Invalid ${varName} entry "${source}": ${(e as Error).message}`);
     }
   });
 }
 
-export function findBlockingRule(rules: BlockRule[], method: string, url: string): BlockRule | undefined {
+export function findMatchingRule(rules: UrlRule[], method: string, url: string): UrlRule | undefined {
   const upper = method.toUpperCase();
   return rules.find((r) => (!r.method || r.method === upper) && r.pattern.test(url));
 }
 
 /** 配列（wrangler vars の JSON 値）、JSON 文字列、改行区切り文字列（正規表現中の "," と衝突するためカンマ区切りは不可）を受け付ける */
-function normalizeList(raw: unknown): string[] {
+function normalizeList(raw: unknown, varName: string): string[] {
   if (raw == null || raw === "") return [];
   let list: unknown = raw;
   if (typeof raw === "string") {
@@ -54,7 +54,7 @@ function normalizeList(raw: unknown): string[] {
       list = trimmed.split("\n");
     }
   }
-  if (!Array.isArray(list)) throw new Error("BLOCKED_URL_PATTERNS must be an array or string");
+  if (!Array.isArray(list)) throw new Error(`${varName} must be an array or string`);
   return list
     .map((v) => String(v).trim())
     .filter((v) => v !== "" && !v.startsWith("#"));
