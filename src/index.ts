@@ -91,9 +91,17 @@ app.all("*", async (c) => {
 
   const headers = new Headers(c.req.raw.headers);
   const clientIp = headers.get("cf-connecting-ip");
-  for (const h of STRIPPED_REQUEST_HEADERS) headers.delete(h);
+  // WebSocket のアップグレード要求は Upgrade / Connection を残して転送する
+  // （Workers の fetch は 101 + webSocket を返し、それをそのままクライアントへ返せば中継される）
+  const isWebSocket = headers.get("upgrade")?.toLowerCase() === "websocket";
+  for (const h of STRIPPED_REQUEST_HEADERS) {
+    if (isWebSocket && (h === "upgrade" || h === "connection")) continue;
+    headers.delete(h);
+  }
 
   if (clientIp) {
+    // cf-connecting-ip は Cloudflare が付与するため信頼できる。クライアント送信の X-Real-IP は上で削除済み
+    headers.set("x-real-ip", clientIp);
     const prior = headers.get("x-forwarded-for");
     headers.set("x-forwarded-for", prior ? `${prior}, ${clientIp}` : clientIp);
   }

@@ -94,5 +94,23 @@ gcloud iam service-accounts keys create service-account.json \
 ## 補足
 
 - ID トークンは Worker の isolate ごとにメモリへキャッシュし、期限の 5 分前に再取得します。
-- `Host`、hop-by-hop ヘッダー、Cloudflare の `cf-*` ヘッダーは転送しません。`X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` を付与します。
+- `Host`、hop-by-hop ヘッダー、Cloudflare の `cf-*` ヘッダーは転送しません。`X-Real-IP`（`cf-connecting-ip` の値。クライアントが送ったものは捨てる）と `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` を付与します。
+- WebSocket（`Upgrade: websocket`）はそのまま中継します。Cloud Run 側の WebSocket はリクエストタイムアウト（最大 60 分）で切断されます。
 - リダイレクトは追わず、レスポンスをそのままクライアントへ返します。
+
+## Vaultwarden で使う場合
+
+| 設定先 | 設定 | 理由 |
+|---|---|---|
+| Worker | `PRESERVE_CLIENT_AUTHORIZATION=true` | Bitwarden クライアントは `Authorization` に自前のトークンを使うため |
+| Worker | `CLOUD_RUN_URL` は `*.run.app` の URL | Cloud Run はカスタムドメインの audience をデフォルトで受け付けない（使う場合は `--add-custom-audiences`） |
+| Worker | `BLOCKED_URL_PATTERNS` に `/admin{/*}?` | 管理画面を外部から使わせない |
+| Vaultwarden | `DOMAIN=https://<Worker のドメイン>` | WebAuthn・メールや Send のリンクが入口のドメインを使うため |
+| Vaultwarden | `IP_HEADER` はデフォルト（`X-Real-IP`）のまま | プロキシが実クライアント IP を入れるため |
+| Cloud Run | `--max-instances=1` | WebSocket 通知がインスタンス内メモリで管理されるため |
+
+- Cloud Run の HTTP/1 リクエストボディ上限は 32MB なので、それを超える添付ファイルは送れません。
+- データ（DB、`rsa_key.pem`、添付ファイル）はコンテナ外に永続化してください。Litestream で SQLite をレプリケーションする場合:
+  - 書き込みは 1 インスタンスのみにする（`--max-instances=1`）
+  - アイドル時もレプリケーションが進むよう CPU を常時割り当てる（`--no-cpu-throttling`）
+  - Litestream が複製するのは SQLite だけなので、添付ファイル・Send のファイル（`attachments/`、`sends/`）は別途保存先が必要

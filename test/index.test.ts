@@ -89,6 +89,7 @@ describe("proxy", () => {
     expect(h.get("authorization")).toMatch(/^Bearer .+\..+\..+$/);
     expect(h.get("x-custom")).toBe("abc");
     expect(h.get("x-forwarded-for")).toBe("203.0.113.5");
+    expect(h.get("x-real-ip")).toBe("203.0.113.5");
     expect(h.get("x-forwarded-host")).toBe("proxy.example.com");
     expect(h.get("cf-connecting-ip")).toBeNull();
     expect(h.get("host")).toBeNull();
@@ -140,6 +141,38 @@ describe("proxy", () => {
     const h = new Headers(calls.find((c) => c.url.startsWith(UPSTREAM))!.init.headers);
     expect(h.get("authorization")).toBe("Bearer client-token");
     expect(h.get("x-serverless-authorization")).toMatch(/^Bearer /);
+  });
+
+  it("クライアントが送った X-Real-IP は cf-connecting-ip で置き換える", async () => {
+    await app.request(
+      "https://proxy.example.com/",
+      { headers: { "x-real-ip": "1.2.3.4", "cf-connecting-ip": "203.0.113.5" } },
+      env(),
+    );
+    const h = new Headers(calls.find((c) => c.url.startsWith(UPSTREAM))!.init.headers);
+    expect(h.get("x-real-ip")).toBe("203.0.113.5");
+  });
+
+  it("WebSocket のアップグレード要求は Upgrade / Connection を残す", async () => {
+    await app.request(
+      "https://proxy.example.com/notifications/hub?access_token=abc",
+      { headers: { upgrade: "websocket", connection: "Upgrade", "sec-websocket-key": "k" } },
+      env(),
+    );
+    const upstream = calls.find((c) => c.url.startsWith(UPSTREAM))!;
+    expect(upstream.url).toBe(`${UPSTREAM}/notifications/hub?access_token=abc`);
+    const h = new Headers(upstream.init.headers);
+    expect(h.get("upgrade")).toBe("websocket");
+    expect(h.get("connection")).toBe("Upgrade");
+    expect(h.get("sec-websocket-key")).toBe("k");
+    expect(h.get("authorization")).toMatch(/^Bearer /);
+  });
+
+  it("WebSocket 以外では Upgrade / Connection を転送しない", async () => {
+    await app.request("https://proxy.example.com/", { headers: { upgrade: "h2c", connection: "Upgrade" } }, env());
+    const h = new Headers(calls.find((c) => c.url.startsWith(UPSTREAM))!.init.headers);
+    expect(h.get("upgrade")).toBeNull();
+    expect(h.get("connection")).toBeNull();
   });
 
   it("POST のボディを転送する", async () => {
