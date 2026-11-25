@@ -4,20 +4,13 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "observability": { "enabled": true },
-  "vars": {
-    // 転送先 Cloud Run サービスの URL（パスは無視され、オリジンのみ使用）
-    "CLOUD_RUN_URL": "https://your-service-xxxxxxxxxx-an.a.run.app",
-    // ID トークンの audience。省略時は CLOUD_RUN_URL のオリジン
-    // "AUDIENCE": "https://your-service-xxxxxxxxxx-an.a.run.app",
-    // 403 を返す URL パターン（URLPattern 構文）。先頭に "METHOD " を付けるとメソッド限定
-    "BLOCKED_URL_PATTERNS": [
-      "/admin{/*}?",
-      "/internal/*",
-      "DELETE /api/*"
-    ]
-    // "true" にするとクライアントの Authorization を残し、ID トークンは X-Serverless-Authorization で送る
-    // "PRESERVE_CLIENT_AUTHORIZATION": "false"
-  }
-  // GOOGLE_SERVICE_ACCOUNT_KEY は secret で設定:
-  //   npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY < service-account.json
+  // 変数は Cloudflare ダッシュボード（Settings → Variables and Secrets）で管理する。
+  // keep_vars: true により、デプロイ時にダッシュボードの変数を消さない。
+  //   CLOUD_RUN_URL                  (Text, 必須)
+  //   GOOGLE_SERVICE_ACCOUNT_KEY     (Secret, 必須)
+  //   AUDIENCE                       (Text, 任意)
+  //   BLOCKED_URL_PATTERNS           (JSON または Text, 任意)
+  //   PRESERVE_CLIENT_AUTHORIZATION  (Text, 任意)
+  // ローカル開発 (wrangler dev) では .dev.vars に書く（.dev.vars.example 参照）。
+  "keep_vars": true
 }

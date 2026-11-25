@@ -1,3 +1,12 @@
 # ローカル開発 (wrangler dev) 用。.dev.vars にコピーして値を設定する。
-# サービスアカウントキー JSON を 1 行で（改行は \n のまま）
-GOOGLE_SERVICE_ACCOUNT_KEY={"type":"service_account","client_email":"proxy@PROJECT.iam.gserviceaccount.com","private_key_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","token_uri":"https://oauth2.googleapis.com/token"}
+# 本番の値は Cloudflare ダッシュボード（Settings → Variables and Secrets）で設定する。
+
+CLOUD_RUN_URL=https://your-service-xxxxxxxxxx-an.a.run.app
+# AUDIENCE=https://your-service-xxxxxxxxxx-an.a.run.app
+# PRESERVE_CLIENT_AUTHORIZATION=false
+
+# JSON 配列で 1 行に書く（バックスラッシュは \\ にする）
+BLOCKED_URL_PATTERNS='["/admin{/*}?", "/((?:.*/)?\\..*)", "DELETE /api/*"]'
+
+# サービスアカウントキー JSON を 1 行で（private_key 内の改行は \n のまま）
+GOOGLE_SERVICE_ACCOUNT_KEY='{"type":"service_account","client_email":"proxy@PROJECT.iam.gserviceaccount.com","private_key_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","token_uri":"https://oauth2.googleapis.com/token"}'

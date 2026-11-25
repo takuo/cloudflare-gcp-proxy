@@ -43,14 +43,21 @@ gcloud iam service-accounts keys create service-account.json \
 
 ### 3. Cloudflare 側
 
-`wrangler.jsonc` の `vars` を編集し、キーを secret として登録します。
+変数は `wrangler.jsonc` に書かず、Cloudflare ダッシュボードの **Settings → Variables and Secrets** で設定します。`wrangler.jsonc` に `"keep_vars": true` を書いてあるので、デプロイしてもダッシュボードの変数は上書きされません。
 
-```bash
-npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY < service-account.json
-mise run deploy
-```
+- `GOOGLE_SERVICE_ACCOUNT_KEY` は **Secret** 型で、キー JSON の中身をそのまま貼り付けます（CLI なら `npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY < service-account.json`）。
+- そのほかは Text 型です。`BLOCKED_URL_PATTERNS` だけは JSON 型（配列）も使えます。
 
-ローカル開発では `.dev.vars.example` を `.dev.vars` にコピーしてキーを設定します。
+#### GitHub 連携（Workers Builds）
+
+1. **Workers & Pages → Create → Import a repository** でこのリポジトリを選ぶ
+2. Project name は `cloudrun-proxy`（`wrangler.jsonc` の `name` と一致させる）
+3. Build command: `npm run test && npm run typecheck`、Deploy command: `npx wrangler deploy`
+4. Build variables に `NODE_VERSION=24` を設定（Workers Builds は `mise.toml` を読まない）
+
+#### ローカル開発
+
+`.dev.vars.example` を `.dev.vars` にコピーし、値を設定して `mise run dev` で起動します。
 
 ## 設定
 
@@ -64,7 +71,7 @@ mise run deploy
 
 ### BLOCKED_URL_PATTERNS
 
-[URLPattern](https://developer.mozilla.org/docs/Web/API/URL_Pattern_API) 構文で指定します。`wrangler.jsonc` では配列、または改行区切りの文字列が使えます。
+[URLPattern](https://developer.mozilla.org/docs/Web/API/URL_Pattern_API) 構文で指定します（正規表現そのものではありません）。ダッシュボードでは JSON 型なら配列、Text 型なら 1 行に 1 パターンで書きます。
 
 | 例 | 意味 |
 |---|---|
@@ -73,6 +80,7 @@ mise run deploy
 | `/users/:id/secret` | 名前付きパラメータ |
 | `/files/*.env` | ワイルドカード |
 | `/v(1\|2)/debug` | 正規表現グループ |
+| `/((?:.*/)?\..*)` | どの階層でもドットで始まるパス（`/.env`、`/a/.git/config` など） |
 | `DELETE /api/*` | 先頭にメソッドを付けるとそのメソッドだけを対象にする |
 | `https://*.example.com/hidden/*` | ホストを含む URL 全体でマッチ |
 
@@ -80,6 +88,8 @@ mise run deploy
 - 重複スラッシュ（`//admin`）は判定前に 1 つにまとめ、まとめた後のパスで転送します。
 - `.` / `..` セグメントや `%2e` は、判定前に URL パーサーが正規化します。
 - `#` で始まる行はコメントとして無視します。
+- **`/.*` は使わないこと。** パターン中の `/.` がカレントディレクトリとして正規化されて `/*` と同じ意味になり、全パスが 403 になります。ドットを文字として書きたいときは `/(\..*)` のように正規表現グループに入れます。
+- 不正なパターン（`^/\..*` など）があると、すべてのリクエストが 500 になります。
 
 ## 補足
 
