@@ -1,0 +1,26 @@
+[tools]
+node = "24"
+
+[tasks.install]
+description = "依存パッケージをインストール"
+run = "npm install"
+
+[tasks.dev]
+description = "ローカル開発サーバーを起動 (wrangler dev)"
+run = "npx wrangler dev"
+
+[tasks.test]
+description = "テストを実行"
+run = "npx vitest run"
+
+[tasks.typecheck]
+description = "型チェック"
+run = "npx tsc --noEmit"
+
+[tasks.deploy]
+description = "Cloudflare Workers へデプロイ"
+run = "npx wrangler deploy"
+
+[tasks.cf-typegen]
+description = "Workers ランタイム型を生成"
+run = "npx wrangler types"
